@@ -30,6 +30,7 @@ void initializeLoRa()
   LoRa.setPins(csPin, resetPin, irqPin);
   LoRa.setSpreadingFactor(7); // SF7 for maximum data rate
   LoRa.setSignalBandwidth(500E3);
+  LoRa.setTxPower(20);
   if (!LoRa.begin(433E6))
   {
     Serial.println("Starting LoRa failed!");
@@ -39,35 +40,6 @@ void initializeLoRa()
 }
 void sendData()
 {
-
-  float randomNumber = getRandomNumber();
-  JsonDocument doc;
-  doc["device_id"] = device_id;
-  doc["source_left"] = random(100, 601) / 100.0;  // Contoh data
-  doc["source_right"] = random(100, 601) / 100.0; // Contoh data
-  doc["temperature"] = random(100, 601) / 100.0;  // Contoh data
-  doc["flow"] = random(100, 601) / 100.0;         // Contoh data
-
-  String jsonString;
-  serializeJson(doc, jsonString);
-
-  LoRa.beginPacket();
-  LoRa.print(jsonString);
-  LoRa.endPacket();
-
-  Serial.print("Sent data: ");
-  Serial.println(jsonString);
-}
-
-void setup()
-{
-  Serial.begin(115200);
-  initializeLoRa();
-}
-
-void loop()
-{
-  // Memeriksa apakah ada paket yang diterima
 
   int packetSize = LoRa.parsePacket();
   if (packetSize)
@@ -99,11 +71,22 @@ void loop()
 
       // Menampilkan JSON string
       Serial.println(jsonString);
-// delay(20);
+      // delay(20);
       // Mengirim data melalui LoRa
       LoRa.beginPacket();
       LoRa.print(jsonString);
       LoRa.endPacket();
     }
   }
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  initializeLoRa();
+}
+
+void loop()
+{
+  sendData();
 }

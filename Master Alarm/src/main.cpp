@@ -6,20 +6,20 @@
 #include <WiFiManager.h>
 
 #define TRIGGER_PIN 0
+
 // LoRa pins
 const int csPin = 5;     // Chip select for LoRa
-const int resetPin = 15; // Reset for LoRa
-const int irqPin = 33;   // Interrupt for LoRa
+const int resetPin = 15; // Reset untuk LoRa
+const int irqPin = 33;   // Interrupt untuk LoRa
 
 // MQTT settings
-const char *mqtt_server = "test.mosquitto.org";
-const int mqtt_port = 1883;
-const char *mqtt_topic = "lora/data1";
+const char *mqttServer = "test.mosquitto.org";
+const int mqttPort = 1883;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 WiFiManager wifiManager;
-bool wm_nonblocking = false;
+bool wmNonblocking = false;
 
 unsigned long lastLoRaTime = 0;
 String receivedData = "";
@@ -32,6 +32,7 @@ void initializeLoRa()
   LoRa.setPins(csPin, resetPin, irqPin);
   LoRa.setSpreadingFactor(7); // SF7 for maximum data rate
   LoRa.setSignalBandwidth(500E3);
+  LoRa.setTxPower(20);
   if (!LoRa.begin(433E6))
   {
     Serial.println("Starting LoRa failed!");
@@ -45,6 +46,45 @@ void setupWiFi()
   pinMode(TRIGGER_PIN, INPUT);
   wifiManager.setClass("invert");
   wifiManager.autoConnect("ESP32-Setup");
+}
+
+void sendToMQTT(const String &payload, const String &topic)
+{
+  if (client.connected())
+  {
+    if (client.publish(topic.c_str(), payload.c_str()))
+    {
+      Serial.print("Sent to MQTT: ");
+      Serial.println(payload);
+    }
+  }
+  else
+  {
+    Serial.println("MQTT client not connected.");
+  }
+}
+
+void handleReceivedData()
+{
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, receivedData);
+
+  if (!error)
+  {
+    const char *serialNumber = doc["serialnumber"];
+    String topic = "lora/data/" + String(serialNumber);
+
+    // Send data to MQTT
+    sendToMQTT(receivedData, topic);
+  }
+  else
+  {
+    Serial.print("Failed to deserialize JSON: ");
+    Serial.println(error.c_str());
+  }
+
+  // Clear receivedData
+  receivedData = "";
 }
 
 void sendMACAddress()
@@ -65,46 +105,6 @@ void sendMACAddress()
   requestTime = millis();  // Catat waktu pengiriman
 }
 
-void sendToMQTT(const String &payload)
-{
-  if (client.connected())
-  {
-    if (client.publish(mqtt_topic, payload.c_str()))
-    {
-      Serial.print("Sent to MQTT: ");
-      Serial.println(payload);
-    }
-    else
-    {
-      Serial.println("Failed to send to MQTT.");
-    }
-  }
-  else
-  {
-    Serial.println("MQTT client not connected.");
-  }
-}
-
-void handleReceivedData()
-{
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, receivedData);
-
-  if (!error)
-  {
-    // Send data to MQTT
-    sendToMQTT(receivedData);
-  }
-  else
-  {
-    Serial.print("Failed to deserialize JSON: ");
-    Serial.println(error.c_str());
-  }
-
-  // Clear receivedData
-  receivedData = "";
-}
-
 void receiveData()
 {
   int packetSize = LoRa.parsePacket();
@@ -115,8 +115,6 @@ void receiveData()
     {
       receivedData += (char)LoRa.read();
     }
-    Serial.print("Received from Slave: ");
-    Serial.println(receivedData);
     handleReceivedData();
     awaitingResponse = false; // Respons diterima, siap mengirim MAC berikutnya
   }
@@ -126,44 +124,30 @@ void checkResponseTimeout()
 {
   if (awaitingResponse && (millis() - requestTime >= responseTimeout))
   {
-    Serial.println("No response from slave, moving to next slave.");
+    Serial.println("No response from slave");
     awaitingResponse = false; // Timeout, siap mengirim MAC berikutnya
   }
 }
 
 void checkButton()
 {
-  // check for button press
   if (digitalRead(TRIGGER_PIN) == LOW)
   {
-    // poor mans debounce/press-hold, code not ideal for production
     delay(50);
     if (digitalRead(TRIGGER_PIN) == LOW)
     {
-      Serial.println("Button Pressed");
-      // still holding button for 3000 ms, reset settings, code not ideaa for production
-      delay(3000); // reset delay hold
+      delay(3000);
       if (digitalRead(TRIGGER_PIN) == LOW)
       {
-        Serial.println("Button Held");
-        Serial.println("Erasing Config, restarting");
         wifiManager.resetSettings();
         ESP.restart();
       }
 
-      // start portal w delay
-      Serial.println("Starting config portal");
       wifiManager.setConfigPortalTimeout(10);
 
       if (!wifiManager.startConfigPortal("OnDemandAP", "password"))
       {
-        Serial.println("failed to connect or hit timeout");
-        // ESP.restart();
-      }
-      else
-      {
-        // if you get here you have connected to the WiFi
-        Serial.println("connected...yeey :)");
+        Serial.println("Failed to connect or hit timeout");
       }
     }
   }
@@ -171,22 +155,19 @@ void checkButton()
 
 void handleMQTTConnection()
 {
-    if (!client.connected())
+  if (!client.connected())
+  {
+    if (client.connect("ESP32Master"))
     {
-        // Serial.print("Attempting MQTT connection...");
-        if (client.connect("ESP32Master"))
-        {
-            Serial.println("connected");
-        }
-        else
-        {
-            Serial.println("failed, rc=");
-            Serial.print(client.state());
-            // Serial.println(" try again in 5 seconds");
-            // // delay(5000);
-        }
+      Serial.println("MQTT connected");
     }
-    client.loop();
+    else
+    {
+      Serial.print("MQTT connection failed, rc=");
+      Serial.print(client.state());
+    }
+  }
+  client.loop();
 }
 
 void setup()
@@ -200,24 +181,19 @@ void setup()
   setupWiFi();
 
   // Connect to MQTT
-  client.setServer(mqtt_server, mqtt_port);
+  client.setServer(mqttServer, mqttPort);
 }
 
 void loop()
 {
-
   checkButton();
-  // Terima data dari slave
   receiveData();
   handleMQTTConnection();
-
-  // Cek apakah waktu tunggu respons dari slave sudah habis
   checkResponseTimeout();
 
-  if (wm_nonblocking)
+  if (wmNonblocking)
     wifiManager.process();
 
-  // Jika tidak sedang menunggu respons dari slave, kirim MAC address
   if (!awaitingResponse)
   {
     sendMACAddress();
